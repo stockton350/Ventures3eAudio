@@ -17,6 +17,110 @@
     return node;
   }
 
+  function formatTime(seconds) {
+    if (!isFinite(seconds) || seconds < 0) return "0:00";
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  }
+
+  const TRACK_ICON = '<svg class="track-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
+
+  // --- Shared player -------------------------------------------------
+
+  const Player = (function () {
+    const audio = document.getElementById("player-audio");
+    const bar = document.getElementById("player-bar");
+    const toggleBtn = document.getElementById("player-toggle");
+    const iconPlay = document.getElementById("icon-play");
+    const iconPause = document.getElementById("icon-pause");
+    const titleEl = document.getElementById("player-title");
+    const seekEl = document.getElementById("player-seek");
+    const currentEl = document.getElementById("player-current");
+    const durationEl = document.getElementById("player-duration");
+
+    let activeBtn = null;
+    let activePlaylist = null; // array of {url, btn} for auto-advance
+    let activeIndex = -1;
+    let seeking = false;
+
+    function setPlayingIcon(isPlaying) {
+      iconPlay.hidden = isPlaying;
+      iconPause.hidden = !isPlaying;
+      toggleBtn.setAttribute("aria-label", isPlaying ? "Pause" : "Play");
+    }
+
+    function clearActive() {
+      if (activeBtn) activeBtn.classList.remove("playing");
+      activeBtn = null;
+    }
+
+    function playItem(url, label, btn, playlist, index) {
+      if (activeBtn === btn) {
+        // same track: just toggle
+        togglePlayPause();
+        return;
+      }
+      clearActive();
+      activeBtn = btn;
+      activePlaylist = playlist;
+      activeIndex = index;
+      activeBtn.classList.add("playing");
+
+      bar.hidden = false;
+      titleEl.textContent = label;
+      audio.src = url;
+      audio.currentTime = 0;
+      audio.play();
+    }
+
+    function togglePlayPause() {
+      if (!audio.src) return;
+      if (audio.paused) audio.play();
+      else audio.pause();
+    }
+
+    function playNext() {
+      if (!activePlaylist || activeIndex < 0) return;
+      for (let i = activeIndex + 1; i < activePlaylist.length; i++) {
+        const next = activePlaylist[i];
+        if (next.url) {
+          playItem(next.url, next.label, next.btn, activePlaylist, i);
+          return;
+        }
+      }
+      clearActive();
+      setPlayingIcon(false);
+    }
+
+    toggleBtn.addEventListener("click", togglePlayPause);
+    audio.addEventListener("play", () => setPlayingIcon(true));
+    audio.addEventListener("pause", () => setPlayingIcon(false));
+    audio.addEventListener("ended", playNext);
+    audio.addEventListener("loadedmetadata", () => {
+      durationEl.textContent = formatTime(audio.duration);
+    });
+    audio.addEventListener("timeupdate", () => {
+      if (seeking) return;
+      currentEl.textContent = formatTime(audio.currentTime);
+      if (audio.duration) {
+        seekEl.value = String(Math.round((audio.currentTime / audio.duration) * 1000));
+      }
+    });
+    seekEl.addEventListener("input", () => {
+      seeking = true;
+      currentEl.textContent = formatTime((seekEl.value / 1000) * (audio.duration || 0));
+    });
+    seekEl.addEventListener("change", () => {
+      if (audio.duration) audio.currentTime = (seekEl.value / 1000) * audio.duration;
+      seeking = false;
+    });
+
+    return { playItem };
+  })();
+
+  // --- Rendering -------------------------------------------------
+
   function buildUnitJump(units, catalogId) {
     const nav = el("nav", { class: "unit-jump" });
     units.forEach((u) => {
@@ -28,13 +132,22 @@
 
   function buildTrackList(items, links, missingCounter) {
     const list = el("ul", { class: "track-list" });
-    items.forEach((item) => {
+    const playlist = []; // parallel to items, for auto-advance within this unit
+
+    items.forEach((item, index) => {
       const url = links[item.filename];
       const li = el("li");
+
       if (url) {
-        li.appendChild(el("a", { class: "track", href: url, target: "_blank", rel: "noopener", text: item.label }));
+        const btn = el("button", { type: "button", class: "track" });
+        btn.innerHTML = TRACK_ICON;
+        btn.appendChild(document.createTextNode(item.label));
+        btn.addEventListener("click", () => Player.playItem(url, item.label, btn, playlist, index));
+        li.appendChild(btn);
+        playlist.push({ url, label: item.label, btn });
       } else {
         missingCounter.count++;
+        playlist.push({ url: null, label: item.label, btn: null });
         li.appendChild(el("span", {
           class: "track missing",
           title: "Audio not uploaded yet",
@@ -43,6 +156,7 @@
       }
       list.appendChild(li);
     });
+
     return list;
   }
 
